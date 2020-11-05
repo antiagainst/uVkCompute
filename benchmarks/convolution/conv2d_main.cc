@@ -68,8 +68,6 @@ static ShaderCode kShaderCodeCases[] = {
 };
 #undef SHADER_TILE
 
-static int ceil_div(int a, int b) { return (a + b - 1) / b; }
-
 static void Conv2D(::benchmark::State &state, ::uvkc::vulkan::Device *device,
                    const ::uvkc::benchmark::LatencyMeasure *latency_measure,
                    const uint32_t *code, size_t code_num_words, int input_h,
@@ -207,11 +205,10 @@ static void Conv2D(::benchmark::State &state, ::uvkc::vulkan::Device *device,
   dispatch_cmdbuf->BindPipelineAndDescriptorSets(
       *pipeline, {bound_descriptor_sets.data(), bound_descriptor_sets.size()});
   if (wg_should_tile_oc) {
-    dispatch_cmdbuf->Dispatch(ceil_div(output_c, wg_count_x),
-                              ceil_div(output_w, wg_count_y), output_h);
+    dispatch_cmdbuf->Dispatch(output_c / wg_count_x, output_w / wg_count_y,
+                              output_h);
   } else {
-    dispatch_cmdbuf->Dispatch(ceil_div(output_w, wg_count_x),
-                              ceil_div(output_h, wg_count_y), 1);
+    dispatch_cmdbuf->Dispatch(output_w / wg_count_x, output_h / wg_count_y, 1);
   }
   BM_CHECK_OK(dispatch_cmdbuf->End());
   BM_CHECK_OK(device->QueueSubmitAndWait(*dispatch_cmdbuf));
@@ -276,11 +273,9 @@ static void Conv2D(::benchmark::State &state, ::uvkc::vulkan::Device *device,
     }
 
     if (wg_should_tile_oc) {
-      cmdbuf->Dispatch(ceil_div(output_c, wg_count_x),
-                       ceil_div(output_w, wg_count_y), output_h);
+      cmdbuf->Dispatch(output_c / wg_count_x, output_w / wg_count_y, output_h);
     } else {
-      cmdbuf->Dispatch(ceil_div(output_w, wg_count_x),
-                       ceil_div(output_h, wg_count_y), 1);
+      cmdbuf->Dispatch(output_w / wg_count_x, output_h / wg_count_y, 1);
     }
 
     if (use_timestamp) {
