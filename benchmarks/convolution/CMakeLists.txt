@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+uvkc_glsl_shader_instance(
+  NAME
+    conv2d_plain_shader
+  SRC
+    "conv2d_plain.glsl"
+)
+
 uvkc_glsl_shader_permutation(
   NAME
     conv2d_tiled_shader
@@ -28,6 +35,7 @@ uvkc_cc_binary(
   SRCS
     "conv2d_main.cc"
   DEPS
+    ::conv2d_plain_shader
     ::conv2d_tiled_shader
     benchmark::benchmark
     uvkc::benchmark::main

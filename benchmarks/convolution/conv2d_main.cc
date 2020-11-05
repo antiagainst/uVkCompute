@@ -31,20 +31,30 @@ using ::uvkc::vulkan::Pipeline;
 
 static const char kBenchmarkName[] = "convolution";
 
+static uint32_t kPlainShader[] = {
+#include "conv2d_plain_shader_spirv_instance.inc"
+};
+
 #include "conv2d_tiled_shader_spirv_permutation.inc"
 
 struct ShaderCode {
   const char *name;       // Test case name
   const uint32_t *code;   // SPIR-V code
   size_t code_num_bytes;  // Number of bytes for SPIR-V code
-  int wg_tile_ow;         // Workgroup tile size along output width dimension
-  int wg_tile_oc;         // Workgroup tile size along output channel dimension
+  // Whether to tile the output channel dimension
+  bool wg_should_tile_oc;
+  //  wg_should_tile_oc: workgroup size along output width dimension
+  // !wg_should_tile_oc: workgroup size along output height dimension
+  int wg_count_y;
+  //  wg_should_tile_oc: workgroup size along output channel dimension
+  // !wg_should_tile_oc: workgroup size along output width dimension
+  int wg_count_x;
 };
 
-#define SHADER_TILE(A, B)                             \
-  {                                                   \
-#A "x" #B, WG_TILE_OW_##A##_WG_TILE_OC_##B,       \
-        sizeof(WG_TILE_OW_##A##_WG_TILE_OC_##B), A, B \
+#define SHADER_TILE(A, B)                                   \
+  {                                                         \
+    "1x" #A "x" #B, WG_TILE_OW_##A##_WG_TILE_OC_##B,        \
+        sizeof(WG_TILE_OW_##A##_WG_TILE_OC_##B), true, A, B \
   }
 
 static ShaderCode kShaderCodeCases[] = {
@@ -54,15 +64,18 @@ static ShaderCode kShaderCodeCases[] = {
     SHADER_TILE(8, 32),  SHADER_TILE(8, 64),
     SHADER_TILE(16, 32), SHADER_TILE(16, 64),
     // clang-format on
+    {"PlainLoop", kPlainShader, sizeof(kPlainShader), false, 16, 32},
 };
 #undef SHADER_TILE
+
+static int ceil_div(int a, int b) { return (a + b - 1) / b; }
 
 static void Conv2D(::benchmark::State &state, ::uvkc::vulkan::Device *device,
                    const ::uvkc::benchmark::LatencyMeasure *latency_measure,
                    const uint32_t *code, size_t code_num_words, int input_h,
                    int input_w, int input_c, int filter_h, int filter_w,
-                   int output_c, int stride_h, int stride_w, int wg_tile_ow,
-                   int wg_tile_oc) {
+                   int output_c, int stride_h, int stride_w,
+                   bool wg_should_tile_oc, int wg_count_y, int wg_count_x) {
   int output_h = (input_h - filter_h) / stride_h + 1;
   int output_w = (input_w - filter_w) / stride_w + 1;
 
@@ -193,8 +206,13 @@ static void Conv2D(::benchmark::State &state, ::uvkc::vulkan::Device *device,
   BM_CHECK_OK(dispatch_cmdbuf->Begin());
   dispatch_cmdbuf->BindPipelineAndDescriptorSets(
       *pipeline, {bound_descriptor_sets.data(), bound_descriptor_sets.size()});
-  dispatch_cmdbuf->Dispatch(output_c / wg_tile_oc, output_w / wg_tile_ow,
-                            output_h);
+  if (wg_should_tile_oc) {
+    dispatch_cmdbuf->Dispatch(ceil_div(output_c, wg_count_x),
+                              ceil_div(output_w, wg_count_y), output_h);
+  } else {
+    dispatch_cmdbuf->Dispatch(ceil_div(output_w, wg_count_x),
+                              ceil_div(output_h, wg_count_y), 1);
+  }
   BM_CHECK_OK(dispatch_cmdbuf->End());
   BM_CHECK_OK(device->QueueSubmitAndWait(*dispatch_cmdbuf));
 
@@ -257,7 +275,13 @@ static void Conv2D(::benchmark::State &state, ::uvkc::vulkan::Device *device,
       cmdbuf->WriteTimestamp(*query_pool, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0);
     }
 
-    cmdbuf->Dispatch(output_c / wg_tile_oc, output_w / wg_tile_ow, output_h);
+    if (wg_should_tile_oc) {
+      cmdbuf->Dispatch(ceil_div(output_c, wg_count_x),
+                       ceil_div(output_w, wg_count_y), output_h);
+    } else {
+      cmdbuf->Dispatch(ceil_div(output_w, wg_count_x),
+                       ceil_div(output_h, wg_count_y), 1);
+    }
 
     if (use_timestamp) {
       cmdbuf->WriteTimestamp(*query_pool, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
@@ -346,8 +370,8 @@ void RegisterVulkanBenchmarks(
     ::benchmark::RegisterBenchmark(
         test_name.c_str(), Conv2D, device, latency_measure, shader.code,
         shader.code_num_bytes / sizeof(uint32_t), input_h, input_w, input_c,
-        filter_h, filter_w, output_c, stride_h, stride_w, shader.wg_tile_ow,
-        shader.wg_tile_oc)
+        filter_h, filter_w, output_c, stride_h, stride_w,
+        shader.wg_should_tile_oc, shader.wg_count_y, shader.wg_count_x)
         ->UseManualTime()
         ->Unit(::benchmark::kMicrosecond);
   }
